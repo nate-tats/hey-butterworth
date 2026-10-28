@@ -1,0 +1,4 @@
+dataset/
+__pycache__/
+audio_chopper.py
+.DS_Store

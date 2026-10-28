@@ -6,13 +6,21 @@ const int PIN_DIN = 4;
 const int PIN_LED = 2;
 
 const uint32_t SAMPLE_RATE = 16000;
-const uint32_t RECORD_SECONDS = 3;
-const size_t NUM_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
+const uint32_t DEFAULT_SECONDS = 3;
+const uint32_t MAX_SECONDS = 10;
+size_t NUM_SAMPLES = SAMPLE_RATE * DEFAULT_SECONDS;
 const size_t CHUNK = 256;
 
 I2SClass i2s;
 int16_t *audio = nullptr;
 int32_t chunkBuf[CHUNK];
+
+bool allocAudio(uint32_t tenths) {
+  free(audio);
+  NUM_SAMPLES = (size_t)(SAMPLE_RATE / 10) * tenths;
+  audio = (int16_t *)malloc(NUM_SAMPLES * sizeof(int16_t));
+  return audio != nullptr;
+}
 
 void record() {
   digitalWrite(PIN_LED, HIGH);
@@ -69,8 +77,7 @@ void setup() {
   pinMode(PIN_LED, OUTPUT);
   delay(500);
 
-  audio = (int16_t *)malloc(NUM_SAMPLES * sizeof(int16_t));
-  if (!audio) {
+  if (!allocAudio(DEFAULT_SECONDS * 10)) {
     Serial.println("ERROR: not enough memory for the audio buffer");
     while (true) delay(1000);
   }
@@ -83,7 +90,8 @@ void setup() {
   }
 
   Serial.printf("Ready. Free heap: %lu bytes\n", (unsigned long)ESP.getFreeHeap());
-  Serial.println("Send t to test levels, r to record and send audio.");
+  Serial.println("Send t to test levels, r to record 3 s and send audio.");
+  Serial.println("Send R then one byte (1-100, tenths of a second) to record and send audio.");
 }
 
 void loop() {
@@ -93,6 +101,17 @@ void loop() {
       record();
       printStats();
     } else if (c == 'r') {
+      record();
+      sendAudio();
+    } else if (c == 'R') {
+      unsigned long start = millis();
+      while (!Serial.available() && millis() - start < 1000) delay(1);
+      if (!Serial.available()) return;
+      uint32_t tenths = (uint8_t)Serial.read();
+      if (tenths < 1 || tenths > MAX_SECONDS * 10 || !allocAudio(tenths)) {
+        Serial.println("ERROR: bad length or not enough memory");
+        return;
+      }
       record();
       sendAudio();
     }
