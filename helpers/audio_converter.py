@@ -6,6 +6,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 import soundfile as sf
+import webrtcvad
 
 SR = 16000  # for the mic
 LABELS = ("ww", "sp", "bg")  # same tags as dataset_recording.py
@@ -14,6 +15,13 @@ CLIP_LEN = int(SR * CLIP_SEC)
 ROOT = Path(__file__).parent.parent / "dataset"
 RECORDINGS, LONG_CLIPS = ROOT / "raw" / "recordings", ROOT / "raw" / "long_clips"
 PROCESSED = ROOT / "processed"
+
+# sp clips are kept only if they contain speech (energy gate + WebRTC VAD). No other label is checked.
+KEEP_SPEECH = {"sp": True}
+SP_MIN_DBFS = -45      # loudest 100 ms must reach this level, otherwise the clip is silence
+VAD_MODE = 3           # WebRTC aggressiveness 0-3 (higher drops more non-speech)
+VAD_FRAME = int(SR * 0.03)
+VAD_MIN_SPEECH = 0.10  # fraction of 30 ms frames the VAD must call speech
 
 
 def load(path):
@@ -84,6 +92,23 @@ def label_of(wav):
     return m.group(1) if m else None
 
 
+def loudest_dbfs(clip):
+    """Level of the loudest 100 ms."""
+    n = SR // 10
+    frames = clip[:len(clip) // n * n].reshape(-1, n)
+    return 20 * np.log10(max(np.sqrt((frames.astype(np.float64) ** 2).mean(axis=1)).max(), 1e-9))
+
+
+def has_speech(clip):
+    """Energy gate (not silence) and WebRTC VAD (enough speech frames)."""
+    if loudest_dbfs(clip) < SP_MIN_DBFS:
+        return False
+    pcm = to_int16(clip)
+    vad = webrtcvad.Vad(VAD_MODE)
+    chunks = [pcm[i:i + VAD_FRAME].tobytes() for i in range(0, len(pcm) - VAD_FRAME + 1, VAD_FRAME)]
+    return sum(vad.is_speech(c, SR) for c in chunks) / len(chunks) >= VAD_MIN_SPEECH
+
+
 def save(clips, prefix, store):
     saved = dupes = 0
     for clip in clips:
@@ -94,7 +119,7 @@ def save(clips, prefix, store):
     return saved, dupes
 
 
-def run(folder, make_clips, keep_raw):
+def run(folder, make_clips, keep_raw, sp_stats):
     """Process every wav in folder; the label comes from its ww_/sp_/bg_ prefix."""
     wavs = sorted(folder.glob("*.wav"))
     print(f"{len(wavs)} files in {folder.relative_to(ROOT.parent)}")
@@ -109,6 +134,14 @@ def run(folder, make_clips, keep_raw):
             if clips is None:
                 print(f"  {wav.name}: shorter than {CLIP_SEC}s, skipped")
                 continue
+            rejected = 0
+            if label in KEEP_SPEECH:
+                kept = [c for c in clips if has_speech(c) == KEEP_SPEECH[label]]
+                rejected, clips = len(clips) - len(kept), kept
+                if label == "sp":
+                    sp_stats["files"] += 1
+                    sp_stats["kept"] += len(kept)
+                    sp_stats["rejected"] += rejected
             store = stores.setdefault(label, Store(PROCESSED / label))
             # bg_mems_viroom_0086 -> bg_mems_viroom; the clips get fresh numbers
             prefix = re.sub(r"_\d+$", "", wav.stem)
@@ -116,7 +149,8 @@ def run(folder, make_clips, keep_raw):
         except Exception as e:
             print(f"  {wav.name}: failed ({e}), raw kept")
             continue
-        print(f"  {wav.name} -> processed/{label}: {saved} saved, {dupes} duplicate")
+        extra = f", {rejected} no speech" if label in KEEP_SPEECH else ""
+        print(f"  {wav.name} -> processed/{label}: {saved} saved, {dupes} duplicate{extra}")
         if not keep_raw:
             wav.unlink()
 
@@ -133,8 +167,12 @@ def main():
     if args.window <= 0:
         ap.error("--window must be positive")
 
-    run(RECORDINGS, lambda a: [fit_to_length(a, CLIP_LEN)], keep_raw=False)
-    run(LONG_CLIPS, lambda a: chop(a, CLIP_LEN, int(SR * args.window)) if len(a) >= CLIP_LEN else None, args.keep_raw)
+    sp = {"files": 0, "kept": 0, "rejected": 0}
+    run(RECORDINGS, lambda a: [fit_to_length(a, CLIP_LEN)], keep_raw=False, sp_stats=sp)
+    run(LONG_CLIPS, lambda a: chop(a, CLIP_LEN, int(SR * args.window)) if len(a) >= CLIP_LEN else None, args.keep_raw, sp)
+    if sp["files"]:
+        total = sp["kept"] + sp["rejected"]
+        print(f"sp: {sp['kept']} of {total} clips kept from {sp['files']} files ({sp['rejected']} had no speech)")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ dataset/
 
 Labels: `ww` (wake word), `sp` (other speech), `bg` (background).
 
-Requires `pyserial` (recording) and `librosa`, `soundfile`, `numpy` (converting).
+Requires `pyserial` (recording) and `librosa`, `soundfile`, `numpy`, `webrtcvad` (converting; `pip install webrtcvad-wheels` if `webrtcvad` won't build).
 
 ## dataset_recording.py
 
@@ -52,6 +52,10 @@ python helpers/audio_converter.py --window 0.5 --keep-raw
 
 Clips whose audio already exists in `processed/<label>/` are skipped (content match, not filename);
 the raw file is still deleted in that case. Numbering continues from what is already in `processed`.
+Speech check (`sp` only; `ww` and `bg` are never checked). An `sp` clip is kept only if it contains speech: its loudest
+100 ms is above `SP_MIN_DBFS` (-45 dBFS) and the WebRTC VAD (mode 3, the most aggressive) hears speech in at least
+`VAD_MIN_SPEECH` (10%) of 30 ms frames. Rejected clips are not saved (their raw file is still deleted).
+The thresholds are constants at the top of `audio_converter.py`.
 Files with no label prefix, long clips shorter than 1.5 s, and files that fail to load are skipped and kept.
 
 | Flag | Default | Description |
