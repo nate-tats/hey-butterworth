@@ -17,7 +17,9 @@ RECORDINGS, LONG_CLIPS = ROOT / "raw" / "recordings", ROOT / "raw" / "long_clips
 PROCESSED = ROOT / "processed"
 
 # sp clips are kept only if they contain speech (energy gate + WebRTC VAD). No other label is checked.
+# sp clips without speech are relabeled bg (sp_mems_x -> bg_mems_x) and saved to processed/bg.
 KEEP_SPEECH = {"sp": True}
+RELABEL_REJECTED = {"sp": "bg"}
 SP_MIN_DBFS = -45      # loudest 100 ms must reach this level, otherwise the clip is silence
 VAD_MODE = 3           # WebRTC aggressiveness 0-3 (higher drops more non-speech)
 VAD_FRAME = int(SR * 0.03)
@@ -134,22 +136,28 @@ def run(folder, make_clips, keep_raw, sp_stats):
             if clips is None:
                 print(f"  {wav.name}: shorter than {CLIP_SEC}s, skipped")
                 continue
-            rejected = 0
+            moved = []
             if label in KEEP_SPEECH:
-                kept = [c for c in clips if has_speech(c) == KEEP_SPEECH[label]]
-                rejected, clips = len(clips) - len(kept), kept
+                flags = [has_speech(c) == KEEP_SPEECH[label] for c in clips]
+                moved = [c for c, ok in zip(clips, flags) if not ok]
+                clips = [c for c, ok in zip(clips, flags) if ok]
                 if label == "sp":
                     sp_stats["files"] += 1
-                    sp_stats["kept"] += len(kept)
-                    sp_stats["rejected"] += rejected
+                    sp_stats["kept"] += len(clips)
+                    sp_stats["rejected"] += len(moved)
             store = stores.setdefault(label, Store(PROCESSED / label))
             # bg_mems_viroom_0086 -> bg_mems_viroom; the clips get fresh numbers
             prefix = re.sub(r"_\d+$", "", wav.stem)
             saved, dupes = save(clips, prefix, store)
+            moved_saved = moved_dupes = 0
+            if moved:
+                new_label = RELABEL_REJECTED[label]
+                new_store = stores.setdefault(new_label, Store(PROCESSED / new_label))
+                moved_saved, moved_dupes = save(moved, new_label + prefix[len(label):], new_store)
         except Exception as e:
             print(f"  {wav.name}: failed ({e}), raw kept")
             continue
-        extra = f", {rejected} no speech" if label in KEEP_SPEECH else ""
+        extra = f", {len(moved)} no speech -> processed/{RELABEL_REJECTED[label]}: {moved_saved} saved, {moved_dupes} duplicate" if moved else ""
         print(f"  {wav.name} -> processed/{label}: {saved} saved, {dupes} duplicate{extra}")
         if not keep_raw:
             wav.unlink()
@@ -172,7 +180,7 @@ def main():
     run(LONG_CLIPS, lambda a: chop(a, CLIP_LEN, int(SR * args.window)) if len(a) >= CLIP_LEN else None, args.keep_raw, sp)
     if sp["files"]:
         total = sp["kept"] + sp["rejected"]
-        print(f"sp: {sp['kept']} of {total} clips kept from {sp['files']} files ({sp['rejected']} had no speech)")
+        print(f"sp: {sp['kept']} of {total} clips kept from {sp['files']} files ({sp['rejected']} had no speech, relabeled bg)")
 
 
 if __name__ == "__main__":
