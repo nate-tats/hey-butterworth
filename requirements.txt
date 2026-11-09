@@ -1,0 +1,12 @@
+# dataset tools (helpers/)
+pyserial            # dataset_recording.py
+librosa             # audio_converter.py
+soundfile
+webrtcvad-wheels
+# also: ffmpeg (mp3/m4a input), piper-sample-generator in ~/piper-sample-generator (generate_piper.py)
+
+# training (ml/)
+numpy
+scipy               # augment.py
+matplotlib          # make_spectrograms.py --preview
+tensorflow          # model.build_model, test_streaming.py

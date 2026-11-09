@@ -1,0 +1,21 @@
+# audio lives on Google Drive (see dataset/README.md); only the manifest and README are tracked
+dataset/processed/
+dataset/raw/
+dataset/spectrograms/
+
+# training outputs
+runs/
+*.keras
+*.h5
+
+firmware/i2s_debug/
+audio_chopper.py
+
+__pycache__/
+.venv/
+venv/
+.ipynb_checkpoints/
+.DS_Store
+
+# review sheets from ml/features.py spans
+dataset/span_review/

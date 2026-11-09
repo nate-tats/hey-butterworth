@@ -64,12 +64,23 @@ void printStats() {
                 (unsigned long)chunkBuf[2], (unsigned long)chunkBuf[3]);
 }
 
+const size_t SEND_CHUNK = 256;   // must match SEND_CHUNK in dataset_recording.py
+
 void sendAudio() {
   uint32_t bytes = NUM_SAMPLES * sizeof(int16_t);
   Serial.write((const uint8_t *)"AUDIO", 5);
   Serial.write((const uint8_t *)&bytes, 4);
-  Serial.write((const uint8_t *)audio, bytes);
-  Serial.flush();
+  const uint8_t *p = (const uint8_t *)audio;
+  for (uint32_t off = 0; off < bytes; off += SEND_CHUNK) {
+    size_t n = min((uint32_t)SEND_CHUNK, bytes - off);
+    Serial.write(p + off, n);
+    Serial.flush();
+    unsigned long t = millis();
+    while (Serial.read() != 'A') {          // wait for the PC's ack
+      if (millis() - t > 2000) return;      // PC gone: give up on this clip
+      delay(1);
+    }
+  }
 }
 
 void setup() {
