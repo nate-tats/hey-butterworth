@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--label", required=True, choices=("ww", "sp", "bg"),
                     help="ww = wake word, sp = other speech, bg = background")
     ap.add_argument("--note", help="describe the setting of recording, e.g. kitchen (letters, digits, hyphens)")
-    ap.add_argument("--gap", type=float, default=1.0, help="countdown seconds before each recording")
+    ap.add_argument("--gap", type=float, default=0.0, help="countdown seconds before each recording")
     ap.add_argument("--port", help="serial port (auto-detected if omitted)")
     ap.add_argument("--out", type=Path, default=OUT_DIR, help="folder to save clips in (default: dataset/raw/recordings)")
     args = ap.parse_args()

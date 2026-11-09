@@ -1,6 +1,8 @@
 import argparse
 import hashlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import librosa
@@ -10,10 +12,11 @@ import webrtcvad
 
 SR = 16000  # for the mic
 LABELS = ("ww", "sp", "bg")  # same tags as dataset_recording.py
+AUDIO_EXTS = (".wav", ".flac", ".mp3", ".m4a")  # raw formats accepted; output is always wav
 CLIP_SEC = 1.5
 CLIP_LEN = int(SR * CLIP_SEC)
 ROOT = Path(__file__).parent.parent / "dataset"
-RECORDINGS, LONG_CLIPS = ROOT / "raw" / "recordings", ROOT / "raw" / "long_clips"
+RECORDINGS, LONG_CLIPS, GENERATED = (ROOT / "raw" / d for d in ("recordings", "long_clips", "generated"))
 PROCESSED = ROOT / "processed"
 
 # sp clips are kept only if they contain speech (energy gate + WebRTC VAD). No other label is checked.
@@ -27,8 +30,16 @@ VAD_MIN_SPEECH = 0.10  # fraction of 30 ms frames the VAD must call speech
 
 
 def load(path):
-    audio, _ = librosa.load(path, sr=SR, mono=True)  # resample + mono
-    return audio
+    if path.suffix.lower() in (".wav", ".flac"):
+        audio, _ = librosa.load(path, sr=SR, mono=True)  # resample + mono
+        return audio
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg is needed for mp3/m4a (brew install ffmpeg)")
+    cmd = ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"]
+    out = subprocess.run(cmd, capture_output=True)  # decode, mono, resample
+    if out.returncode:
+        raise RuntimeError(out.stderr.decode().strip() or "ffmpeg failed")
+    return np.frombuffer(out.stdout, dtype=np.float32)
 
 
 def to_int16(audio):
@@ -121,9 +132,9 @@ def save(clips, prefix, store):
     return saved, dupes
 
 
-def run(folder, make_clips, keep_raw, sp_stats):
+def run(folder, make_clips, keep_raw, sp_stats, check_speech=True):
     """Process every wav in folder; the label comes from its ww_/sp_/bg_ prefix."""
-    wavs = sorted(folder.glob("*.wav"))
+    wavs = sorted(p for p in folder.iterdir() if p.suffix.lower() in AUDIO_EXTS and not p.name.startswith("."))
     print(f"{len(wavs)} files in {folder.relative_to(ROOT.parent)}")
     stores = {}
     for wav in wavs:
@@ -137,7 +148,7 @@ def run(folder, make_clips, keep_raw, sp_stats):
                 print(f"  {wav.name}: shorter than {CLIP_SEC}s, skipped")
                 continue
             moved = []
-            if label in KEEP_SPEECH:
+            if check_speech and label in KEEP_SPEECH:
                 flags = [has_speech(c) == KEEP_SPEECH[label] for c in clips]
                 moved = [c for c, ok in zip(clips, flags) if not ok]
                 clips = [c for c, ok in zip(clips, flags) if ok]
@@ -166,6 +177,7 @@ def run(folder, make_clips, keep_raw, sp_stats):
 def main():
     ap = argparse.ArgumentParser(description="Convert raw audio to 16 kHz mono 16-bit 1.5 s clips in dataset/processed/<label>.\n"
                                  "raw/recordings: one clip each (loudest 1.5 s), raw deleted.\n"
+                                 "raw/generated: same, but no speech check.\n"
                                  "raw/long_clips: chopped into 1.5 s clips, raw deleted unless --keep-raw.",
                                  formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--window", type=float, default=CLIP_SEC,
@@ -176,7 +188,9 @@ def main():
         ap.error("--window must be positive")
 
     sp = {"files": 0, "kept": 0, "rejected": 0}
-    run(RECORDINGS, lambda a: [fit_to_length(a, CLIP_LEN)], keep_raw=False, sp_stats=sp)
+    one_clip = lambda a: [fit_to_length(a, CLIP_LEN)]
+    run(RECORDINGS, one_clip, keep_raw=False, sp_stats=sp)
+    run(GENERATED, one_clip, keep_raw=False, sp_stats=sp, check_speech=False)
     run(LONG_CLIPS, lambda a: chop(a, CLIP_LEN, int(SR * args.window)) if len(a) >= CLIP_LEN else None, args.keep_raw, sp)
     if sp["files"]:
         total = sp["kept"] + sp["rejected"]
