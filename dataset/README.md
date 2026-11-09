@@ -6,6 +6,26 @@
 
 Rebuild the manifest with `python helpers/build_manifest.py` (dry run: prints the split summary and checks) and add `--write` to write the CSV. The script reads audio only and fails rather than write if a check finds a problem. Split rules and the seed live at the top of that script.
 
+## Download
+
+The full dataset is on Google Drive: [dataset.zip](https://drive.google.com/file/d/1nP777gvYfJU4ylIDqT5QBjz_slohyPHs/view?usp=sharing).
+
+## Dataset size
+
+**27,080 processed clips in total** (`python helpers/dataset_report.py` prints the per-source breakdown).
+
+| Section | Folder | Clips | Sources |
+|---|---|---|---|
+| Wake word | `ww/` | 2,372 | 6 |
+| Speech | `sp/` | 16,726 | 35 |
+| Background | `bg/` | 7,982 | 12 |
+| **Total** | | **27,080** | |
+
+Largest sources per section:
+- `ww`: `generated_hey.butterworth` (2,200), then real voices `mems_vivoice` (105), `mems_natvoice` (54), `mems_micvoice` (7), `mems_jivoice` (4), `mems_shrvoice` (2).
+- `sp`: `sample_librispeech` (7,562), `sample_motispeech` (2,297), `generated_hi.butter` (750), `generated_hello.butter` (550), plus many generated near-miss and far phrases (150-300 each).
+- `bg`: `phone_natrehearsal` (3,843), `phone_nathome` (1,365), `phone_geisel` (1,064), `mems_viroom` (1,032).
+
 ## Filename pattern
 
 `<bg|sp|ww>_<domain>_<name>_<NNNN>.wav`, e.g. `ww_generated_hey.butterworth_0012.wav`. The index restarts at 0000 within each source.

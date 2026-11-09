@@ -1,5 +1,0 @@
-dataset/processed/
-dataset/raw/
-__pycache__/
-audio_chopper.py
-.DS_Store
