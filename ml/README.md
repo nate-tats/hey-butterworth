@@ -1,6 +1,6 @@
 # ml
 
-Two files, one per stage, plus a test. Design and rationale: [`Butterworth.md`](../Butterworth.md).
+Two files, one per stage, plus a test and an analysis script. Design and rationale: [`Butterworth.md`](../Butterworth.md).
 Run from anywhere (`python ml/train.py`); manifest paths are resolved from the repo root.
 
 | File | Stage | What's in it |
@@ -8,6 +8,7 @@ Run from anywhere (`python ml/train.py`); manifest paths are resolved from the r
 | `features.py` | **Spectrogram conversion + augmentation** | Front end (`logmel`: 16 kHz audio -> 40 log-mel bins every 10 ms, `StreamingFrontend`), manifest I/O, wake-phrase spans, waveform augmentation toward the ESP32 MEMS mic, SpecAugment, training batches (`BatchMaker`, `batches`), fixed val set (`eval_set`), spectrogram export |
 | `train.py` | **CNN + training** | 1D temporal CNN (`build_model`, Keras), exact streaming inference (`StreamingButterworth`), training loop and val report |
 | `test_streaming.py` | test | Streaming front end and CNN match the batch/Keras versions exactly |
+| `analyze_run.py` | analysis | Loss/accuracy/AUC curves (train vs val) and a text summary for a run |
 
 `train.py` imports `features.py`, never the other way round. `train.py` also checks that the CNN's receptive field
 (124 frames) and stride (24 frames) match the window `features.py` cuts, so the two can't drift apart.
@@ -21,6 +22,7 @@ python ml/features.py spans                        # wake-phrase spans -> datase
 python ml/train.py                                 # train: 40 epochs x 200 batches of 128 -> runs/<time>/
 python ml/train.py --epochs 2 --steps 20           # quick check
 python ml/test_streaming.py                        # needs TensorFlow
+python ml/analyze_run.py [runs/<time> ...]         # curves -> runs/<time>/training_curves.png (default: latest run)
 ```
 
 ## Training (train.py)
@@ -38,6 +40,7 @@ Each run writes `runs/<time>/` (ignored by git):
 | `history.csv` | loss, AUC, accuracy per epoch (train and val) |
 | `val_report.json` | at threshold 0.5: false-reject rate per wake domain, false-accept rate per class/domain and per generated phrase |
 | `config.json` | all arguments, git commit, span stats, clip counts, parameter count |
+| `training_curves.png` | written by `analyze_run.py`: loss, accuracy, AUC per epoch; best-val-AUC epoch and LR halvings marked |
 
 | Flag | Default | Description |
 |---|---|---|
@@ -52,6 +55,35 @@ Each run writes `runs/<time>/` (ignored by git):
 
 Memory: every clip is cached once as int16 (~1.3 GB for 27k clips) plus the mixing pools (~0.8 GB).
 Still to do (doc section 7): threshold choice by false accepts per hour with `StreamingButterworth`.
+
+## Results
+
+### full-20261109-1509 (first full run)
+
+`python ml/train.py --workers 12`: defaults (40 epochs x 200 batches of 128, lr 1e-3, C=64, seed 0) on
+`manifest_v1_spans.csv` (spans after review: median 0.62 s, 11 wake clips over the 1.03 s limit), commit `9ee6f77`
+plus the uncommitted span files. CPU only (16 cores, WSL2), about 45 minutes.
+
+- Early stopping ended it at epoch 38 of 40. `best.keras` is epoch 30: **val AUC 0.9942**, val accuracy 0.992,
+  val loss 0.028 (train: AUC 0.9991, loss 0.024).
+- Val metrics swung widely until about epoch 20 and settled as the learning rate was halved (epochs 12, 20, 26, 34, 37).
+  Train and val loss end close together: no sign of overfitting.
+
+Val report at threshold 0.5, against the 2-epoch `test-run` (before spans):
+
+| | full run | test-run |
+|---|---|---|
+| False reject, ww/generated (n=200) | 1.0% | 4.5% |
+| **False reject, ww/mems: real voices on the ESP32 mic (n=61)** | **18.0%** | 50% (n=2) |
+| False accept, sp/generated: near-miss phrases (n=950) | 1.7% | 29.3% |
+| False accept, sp/public (n=2297) | 0.6% | 15.3% |
+| False accept, sp/mems and all bg | 0% | up to 5.8% |
+| Worst phrase: "hi butterworth" (n=300) | 4.7% | 58.3% |
+
+The weak point is real wake clips: 18% are missed at threshold 0.5, against 1% of generated ones, so the model doesn't
+yet carry over well to the real mic and voices. False accepts are close to zero everywhere, so there is room to lower
+the threshold; choose it by false accepts per hour with `StreamingButterworth` (above). More wake recordings on
+the ESP32 mic would help most, since only about 170 of the 2,372 wake clips are real.
 
 ## Wake-phrase spans (features.py spans)
 
