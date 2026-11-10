@@ -1,0 +1,4 @@
+path,on_s,off_s,note
+dataset/processed/ww/ww_mems_natvoice_0008.wav,0.50,1.30,auto span ran into a thump at 1.32 s
+dataset/processed/ww/ww_mems_natvoice_0038.wav,0.30,1.12,auto span kept only "hey"; quiet "Butterworth" 0.58-1.1 s
+dataset/processed/ww/ww_mems_natvoice_0053.wav,0.45,1.15,auto span missed the soft start of "hey"
