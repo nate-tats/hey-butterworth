@@ -15,6 +15,7 @@ SAMPLE_RATE = 16000
 MIC = "mems"  # mic tag in the filename
 MARKER = b"AUDIO"
 MAX_SECONDS = 10  # must match MAX_SECONDS in the firmware
+SEND_CHUNK = 256  # must match SEND_CHUNK in the firmware; we ack each chunk with b"A"
 MARKER_TIMEOUT_S = 15
 IDLE_TIMEOUT_S = 3.0
 OUT_DIR = Path(__file__).parent.parent / "dataset" / "raw" / "recordings"
@@ -23,9 +24,10 @@ OUT_DIR = Path(__file__).parent.parent / "dataset" / "raw" / "recordings"
 def find_port(requested):
     if requested:
         return requested
-    names = ("usbserial", "wchusbserial", "SLAB_USBtoUART", "usbmodem")
+    names = ("usbserial", "wchusbserial", "SLAB_USBtoUART", "usbmodem",  # macOS /dev/cu.*
+             "ttyUSB", "ttyACM")                                          # Linux
     ports = [p.device for p in serial.tools.list_ports.comports()
-             if p.device.startswith("/dev/cu.") and any(n in p.device for n in names)]
+             if not p.device.startswith("/dev/tty.") and any(n in p.device for n in names)]
     if len(ports) == 1:
         return ports[0]
     if not ports:
@@ -74,8 +76,14 @@ def record_one(ser, seconds):
     expected = SAMPLE_RATE // 10 * 2 * tenths
     if length != expected:
         raise RuntimeError(f"bad length {length}, expected {expected}")
-    # 115200 baud is ~11.5 KB/s, so allow transfer time plus slack
-    return read_exact(ser, length, length / 10000 + 10)
+    # The firmware sends SEND_CHUNK bytes, then waits (up to 2 s) for an b"A"
+    # ack before sending the next chunk, including after the last one.
+    audio = bytearray()
+    while len(audio) < length:
+        n = min(SEND_CHUNK, length - len(audio))
+        audio += read_exact(ser, n, 5)
+        ser.write(b"A")
+    return bytes(audio)
 
 
 def next_index(out_dir, prefix):
