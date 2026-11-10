@@ -1,7 +1,7 @@
 # hey-butterworth
 
 Embedded voice assistant project: an ESP32 with an I2S MEMS mic that listens for the wake phrase "hey Butterworth".
-Design doc: [`Butterworth.md`](Butterworth.md) (Word original in `docs/Butterworth.docx`).
+Design doc: [`Butterworth.md`](Butterworth.md).
 
 ```
 Butterworth.md  design doc
