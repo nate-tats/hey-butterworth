@@ -18,7 +18,7 @@ Run from anywhere (`python ml/train.py`); manifest paths are resolved from the r
 ```
 python ml/features.py selftest                     # pipeline smoke test on fake clips
 python ml/features.py export --preview 4           # clean spectrograms -> dataset/spectrograms/
-python ml/features.py spans                        # wake-phrase spans -> dataset/manifest_v1_spans.csv + review sheets
+python ml/features.py spans                        # wake-phrase spans -> dataset/manifest_v2_spans.csv + review sheets
 python ml/train.py                                 # train: 40 epochs x 200 batches of 128 -> runs/<time>/
 python ml/train.py --epochs 2 --steps 20           # quick check
 python ml/test_streaming.py                        # needs TensorFlow
@@ -28,7 +28,7 @@ python ml/analyze_run.py [runs/<time> ...]         # curves -> runs/<time>/train
 ## Training (train.py)
 
 Batches are augmented, class/domain balanced, and drawn from the train split only; val is a fixed, unaugmented crop
-per val clip. Wake-phrase spans come from `manifest_v1_spans.csv` (see below), and wake clips longer than 1.03 s
+per val clip. Wake-phrase spans come from `manifest_v2_spans.csv` (see below), and wake clips longer than 1.03 s
 are skipped as positives. Checkpoints keep the best val AUC; the learning rate halves after 3 epochs without
 improvement, and training stops after `--patience` (8) epochs without improvement.
 
@@ -38,13 +38,13 @@ Each run writes `runs/<time>/` (ignored by git):
 |---|---|
 | `best.keras` | model with the best val AUC |
 | `history.csv` | loss, AUC, accuracy per epoch (train and val) |
-| `val_report.json` | at threshold 0.5: false-reject rate per wake domain, false-accept rate per class/domain and per generated phrase |
+| `val_report.json` | at threshold 0.5: false-reject rate per wake domain and per real (mems) speaker, false-accept rate per class/domain and per generated phrase |
 | `config.json` | all arguments, git commit, span stats, clip counts, parameter count |
 | `training_curves.png` | written by `analyze_run.py`: loss, accuracy, AUC per epoch; best-val-AUC epoch and LR halvings marked |
 
 | Flag | Default | Description |
 |---|---|---|
-| `--manifest` | `manifest_v1_spans.csv` if present | Manifest to train from |
+| `--manifest` | `manifest_v2_spans.csv` if present, else `manifest_v2.csv` (`MANIFEST_VERSION` in `features.py`) | Manifest to train from |
 | `--epochs` / `--steps` / `--batch` | 40 / 200 / 128 | Epochs, batches per epoch, batch size |
 | `--lr` | `1e-3` | Adam learning rate |
 | `--channels` | `64` | Conv channels C (64 -> ~65 K parameters) |
@@ -57,6 +57,31 @@ Memory: every clip is cached once as int16 (~1.3 GB for 27k clips) plus the mixi
 Still to do (doc section 7): threshold choice by false accepts per hour with `StreamingButterworth`.
 
 ## Results
+
+### full-v2-20261111-1544 (manifest v2: +81 darrell and +4 seth wake clips in train)
+
+`python ml/train.py --workers 12 --manifest dataset/manifest_v2_spans.csv`, same settings as the first full run.
+Early stopping ended it at epoch 34; `best.keras` is epoch 26 (val AUC 0.9996). 26 wake clips are over the 1.03 s
+limit (15 of them darrell, who speaks slowly) and are not used as positives.
+
+Both models scored on the same fixed v2 val set (`compare.json` in the run folder). The val crops of the `nat`
+clips shift slightly with the extra rows, so the old model's numbers here differ a little from its own run report.
+
+| v2 val | full-20261109-1509 (v1) | full-v2-20261111-1544 |
+|---|---|---|
+| AUC, all val | 0.9968 | 0.9996 |
+| AUC, real wake vs all negatives | 0.9902 | 0.9991 |
+| **Real wake missed, threshold set for 0.5% false accepts** | **10.0%** (t=0.58) | **3.3%** (t=0.89) |
+| Real wake missed, threshold set for 0.1% false accepts | 35.6% (t=0.92) | 16.7% (t=0.99) |
+| At 0.5: real wake missed (n=90) | 8.9% | 1.1% |
+| At 0.5: "hi butterworth" false accepts (n=300) | 4.7% | 16.7% |
+| At 0.5: sp/mems false accepts (n=156) | 0% | 4.5% |
+
+On the v1 val subset alone the picture is the same (real wake missed at 0.5% false accepts: 13.1% -> 4.9%).
+The new model separates real wake clips from everything else much better, but its scores sit higher overall, so 0.5 is
+now too low a threshold: "hi butterworth" is the main false accept. Pick the threshold by false accepts per hour, not 0.5.
+This is one seed per model, and the real val set is 90 clips from mostly one voice, so treat the differences as
+indicative.
 
 ### full-20261109-1509 (first full run)
 
@@ -88,7 +113,7 @@ the ESP32 mic would help most, since only about 170 of the 2,372 wake clips are 
 ## Wake-phrase spans (features.py spans)
 
 Training needs to know where "hey Butterworth" sits in each wake clip, so a crop never cuts it. `spans` finds the
-phrase in every wake clip, writes `dataset/manifest_v1_spans.csv` (manifest_v1 plus `on`/`off` columns, in samples),
+phrase in every wake clip, writes `dataset/manifest_v2_spans.csv` (`--manifest`, default manifest_v2, plus `on`/`off` columns, in samples),
 and draws review sheets of every real recording (plus any clip over the 1.03 s limit) into `dataset/span_review/`.
 
 - Detection uses energy in the 125-7500 Hz speech band (the MEMS clips have rumble below 125 Hz), relative to each
@@ -98,7 +123,8 @@ and draws review sheets of every real recording (plus any clip over the 1.03 s l
 - Fix a wrong span by adding a row to `dataset/span_overrides.csv` (`path,on_s,off_s,note`, seconds), then rerun
   `spans`. Overrides win over detection.
 - Clips over 1.03 s are not used as positives (no streaming window would contain the whole phrase).
-- `train.py` uses `manifest_v1_spans.csv` by default when it exists.
+- `train.py` uses `manifest_v2_spans.csv` by default when it exists. `manifest_v1_spans.csv` is kept for the v1 runs;
+  its rows are identical in v2.
 
 ## Reproducibility
 

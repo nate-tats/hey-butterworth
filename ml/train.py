@@ -166,9 +166,13 @@ def val_report(p, y, rows, threshold=0.5):
     cls = np.array([r["cls"] for r in rows])
     dom = np.array([r["domain"] for r in rows])
     phrase = np.array([r.get("phrase") or "" for r in rows])
-    rep = {"threshold": threshold, "false_reject": {}, "false_accept": {}, "false_accept_by_phrase": {}}
+    spk = np.array([r.get("speaker") or "" for r in rows])
+    rep = {"threshold": threshold, "false_reject": {}, "false_reject_by_speaker": {}, "false_accept": {},
+           "false_accept_by_phrase": {}}
     for d in sorted(set(dom[cls == "ww"])):
         rep["false_reject"][d] = rate((cls == "ww") & (dom == d), ~fire)
+    for s in sorted(set(spk[(cls == "ww") & (dom == "mems")])):
+        rep["false_reject_by_speaker"][s] = rate((cls == "ww") & (dom == "mems") & (spk == s), ~fire)
     for c in ("sp", "bg"):
         for d in sorted(set(dom[cls == c])):
             rep["false_accept"][f"{c}/{d}"] = rate((cls == c) & (dom == d), fire)
@@ -232,6 +236,8 @@ def train(args):
     print(f"\nval at threshold {rep['threshold']}:")
     for k, v in rep["false_reject"].items():
         print(f"  false reject  ww/{k:<14} {v['rate']:.3f}  (n={v['n']})")
+    for k, v in rep["false_reject_by_speaker"].items():
+        print(f"  false reject  ww/mems/{k:<9} {v['rate']:.3f}  (n={v['n']})")
     for k, v in rep["false_accept"].items():
         print(f"  false accept  {k:<17} {v['rate']:.3f}  (n={v['n']})")
     print(f"saved {out}")
@@ -240,9 +246,9 @@ def train(args):
 
 def main():
     ap = argparse.ArgumentParser(description="Train the Butterworth wake-word CNN.")
-    spans = F.ROOT / "dataset" / "manifest_v1_spans.csv"
-    ap.add_argument("--manifest", type=Path, default=spans if spans.exists() else F.ROOT / "dataset" / "manifest_v1.csv",
-                    help="default: manifest_v1_spans.csv (checked wake spans) if present, else manifest_v1.csv")
+    ap.add_argument("--manifest", type=Path, default=F.default_manifest(),
+                    help=f"default: manifest_{F.MANIFEST_VERSION}_spans.csv (checked wake spans) if present, "
+                         f"else manifest_{F.MANIFEST_VERSION}.csv")
     ap.add_argument("--root", type=Path, default=F.ROOT, help="folder the manifest paths start from (repo root)")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--steps", type=int, default=200, help="batches per epoch")

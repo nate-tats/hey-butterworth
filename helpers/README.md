@@ -8,7 +8,7 @@ dataset/
   raw/long_clips/      long files you add by hand, for chopping
   raw/generated/       Piper-generated clips (zero-padded to 1.5 s, no speech check)
   processed/<label>/   16 kHz, mono, 16-bit, 1.5 s clips, sorted by label
-  manifest_v1.csv      every processed clip with its label and train/val split
+  manifest_vN.csv      every processed clip with its label and train/val split, one file per split version
 ```
 
 See `dataset/README.md` for the filename pattern, manifest columns and how the split works.
@@ -108,19 +108,23 @@ python helpers/dataset_report.py --label sp --note kitchen
 
 ## build_manifest.py
 
-Builds `dataset/manifest_v1.csv` (path, label, label_id, source, speaker, domain, phrase, split) from `dataset/processed/`. It reads audio only.
+Builds `dataset/manifest_<version>.csv` (path, label, label_id, source, speaker, domain, phrase, split) from `dataset/processed/`. It reads audio only.
+Each split version (`v1`, `v2`, ...) is an entry in `CONFIGS` at the top of the script; the default is the latest. Real voices are split by speaker and must be listed in the version's `train_voices` or `val_voices`, so a new voice stops the build until you assign it.
 Default is a dry run: it prints the train/val split summary and checks (shared sessions have the same split in every class, no duplicate or missing paths,
 every clip is 16 kHz mono 1.5 s) and writes nothing. `--write` writes the CSV, and refuses to if a check finds a problem.
 Clip names must look like `<bg|sp|ww>_<mems|phone|generated|sample>_<name>_NNNN.wav`, otherwise it exits.
 
 ```
-python helpers/build_manifest.py
+python helpers/build_manifest.py                       # dry run, latest version
 python helpers/build_manifest.py --write
+python helpers/build_manifest.py --version v1 --check  # v1 rules on v1's clips must reproduce manifest_v1.csv
 ```
 
 The split is by whole source, speaker or phrase, not by clip, with one seeded random choice (`SEED = 42`).
-The rules (`VAL_SOURCES`, `VAL_PHRASES`, the generated wake block settings) are constants at the top of the script.
+The rules (`CONFIGS`, the generated wake block settings) are constants at the top of the script.
 
 | Flag | Default | Description |
 |---|---|---|
+| `--version` | latest (`v2`) | Split version from `CONFIGS` |
 | `--write` | off | Write the CSV instead of a dry run |
+| `--check` | off | Rebuild only the clips in the existing CSV and report rows whose split or fields differ |

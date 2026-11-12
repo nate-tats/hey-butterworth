@@ -51,6 +51,14 @@ from scipy import signal
 from scipy.io import wavfile
 
 ROOT = Path(__file__).resolve().parent.parent   # repo root; manifest paths start here
+MANIFEST_VERSION = "v2"   # default split (helpers/build_manifest.py CONFIGS); v1 is kept for comparison
+
+
+def default_manifest():
+    """dataset/manifest_<version>_spans.csv (checked wake spans) if present, else manifest_<version>.csv."""
+    d = ROOT / "dataset"
+    spans = d / f"manifest_{MANIFEST_VERSION}_spans.csv"
+    return spans if spans.exists() else d / f"manifest_{MANIFEST_VERSION}.csv"
 
 # ---------------------------------------------------------------- constants
 SR = 16000
@@ -861,8 +869,8 @@ def main():
     ex.add_argument("--preview", type=int, default=0, metavar="K",
                     help="also save K example spectrogram images per class (needs matplotlib)")
     sp = sub.add_parser("spans", help="wake-phrase spans -> manifest with on/off columns + review sheets")
-    sp.add_argument("--manifest", type=Path, default=ROOT / "dataset" / "manifest_v1.csv")
-    sp.add_argument("--out", type=Path, default=ROOT / "dataset" / "manifest_v1_spans.csv")
+    sp.add_argument("--manifest", type=Path, default=ROOT / "dataset" / f"manifest_{MANIFEST_VERSION}.csv")
+    sp.add_argument("--out", type=Path, help="default: <manifest>_spans.csv")
     sp.add_argument("--overrides", type=Path, default=ROOT / "dataset" / "span_overrides.csv",
                     help="hand-checked spans: path, on_s, off_s (seconds); used instead of detection")
     sp.add_argument("--review", type=Path, default=ROOT / "dataset" / "span_review",
@@ -874,7 +882,8 @@ def main():
     if args.cmd == "export":
         export(args.dataset.resolve(), args.manifest, args.out, args.float16, args.preview)
     elif args.cmd == "spans":
-        spans(args.manifest, args.out, args.overrides, None if args.no_review else args.review)
+        out = args.out or args.manifest.with_name(args.manifest.stem + "_spans.csv")
+        spans(args.manifest, out, args.overrides, None if args.no_review else args.review)
     else:
         selftest()
 
