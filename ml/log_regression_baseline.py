@@ -131,9 +131,9 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description="Logistic-regression baseline on time-pooled log-mels.")
-    spans = F.ROOT / "dataset" / "manifest_v1_spans.csv"
-    ap.add_argument("--manifest", type=Path, default=spans if spans.exists() else F.ROOT / "dataset" / "manifest_v1.csv",
-                    help="default: manifest_v1_spans.csv (checked wake spans) if present, else manifest_v1.csv")
+    ap.add_argument("--manifest", type=Path, default=F.default_manifest(),
+                    help=f"default: manifest_{F.MANIFEST_VERSION}_spans.csv (checked wake spans) if present, "
+                         f"else manifest_{F.MANIFEST_VERSION}.csv")
     ap.add_argument("--root", type=Path, default=F.ROOT, help="folder the manifest paths start from (repo root)")
     ap.add_argument("--batches", type=int, default=100, help="augmented training batches to generate")
     ap.add_argument("--batch", type=int, default=128, help="examples per batch")

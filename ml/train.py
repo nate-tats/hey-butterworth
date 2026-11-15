@@ -166,15 +166,37 @@ def val_report(p, y, rows, threshold=0.5):
     cls = np.array([r["cls"] for r in rows])
     dom = np.array([r["domain"] for r in rows])
     phrase = np.array([r.get("phrase") or "" for r in rows])
-    rep = {"threshold": threshold, "false_reject": {}, "false_accept": {}, "false_accept_by_phrase": {}}
+    spk = np.array([r.get("speaker") or "" for r in rows])
+    rep = {"threshold": threshold, "false_reject": {}, "false_reject_by_speaker": {}, "false_accept": {},
+           "false_accept_by_phrase": {}}
     for d in sorted(set(dom[cls == "ww"])):
         rep["false_reject"][d] = rate((cls == "ww") & (dom == d), ~fire)
+    for s in sorted(set(spk[(cls == "ww") & (dom == "mems")])):
+        rep["false_reject_by_speaker"][s] = rate((cls == "ww") & (dom == "mems") & (spk == s), ~fire)
     for c in ("sp", "bg"):
         for d in sorted(set(dom[cls == c])):
             rep["false_accept"][f"{c}/{d}"] = rate((cls == c) & (dom == d), fire)
     for ph in sorted(set(phrase[(cls == "sp") & (phrase != "")])):
         rep["false_accept_by_phrase"][ph] = rate((cls == "sp") & (phrase == ph), fire)
     return rep
+
+
+def limit_real_wake(train, k, seed=0):
+    """Keep at most k real (mems) wake clips per speaker in train (seeded pick,
+    only clips short enough to be positives); k < 0 keeps all. Returns the filtered rows and the kept count per speaker."""
+    if k < 0:
+        return train, None
+    rng = np.random.default_rng([seed, 7])
+    real = {}
+    for r in train:
+        if r["cls"] == "ww" and r["domain"] == "mems" and r["span"][1] - r["span"][0] <= F.MAX_PHRASE:
+            real.setdefault(r["speaker"], []).append(r)
+    keep = set()
+    for spk in sorted(real):
+        rs = sorted(real[spk], key=lambda r: r["path"])
+        keep |= {rs[i]["path"] for i in rng.permutation(len(rs))[:k]}
+    kept = {spk: sum(r["path"] in keep for r in rs) for spk, rs in sorted(real.items())}
+    return [r for r in train if not (r["cls"] == "ww" and r["domain"] == "mems") or r["path"] in keep], kept
 
 
 def git_commit():
@@ -201,11 +223,17 @@ def train(args):
     if long:
         print(f"  {len(long)} wake clips longer than {F.MAX_PHRASE / F.SR:.2f} s are skipped as positives")
     parts = F.split(man)
+    parts["train"], real_kept = limit_real_wake(parts["train"], args.real_wake, args.seed)
+    share = dict(F.GROUP_SHARE)
+    if real_kept is not None:
+        print(f"real wake clips kept in train per speaker: {real_kept}")
+        if not sum(real_kept.values()):              # keep the wake share at 30%
+            share[("ww", "generated")] += share.pop(("ww", "mems"))
     print(f"train {len(parts['train'])} clips, val {len(parts['val'])} clips")
 
     aug = F.build_augmenter(parts["train"], store, seed=args.seed)
     Xv, yv, vrows = F.eval_set(parts["val"], store, seed=args.seed)
-    maker = F.BatchMaker(parts["train"], store, aug, args.batch, args.seed)
+    maker = F.BatchMaker(parts["train"], store, aug, args.batch, args.seed, share)
     ds = make_dataset(maker, 0, args.workers)
 
     model = build_model(args.channels)
@@ -213,6 +241,7 @@ def train(args):
                   metrics=[keras.metrics.AUC(name="auc"), keras.metrics.BinaryAccuracy(name="acc")])
     config = {**{k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
               "out": str(out), "git_commit": git_commit(), "spans": stats,
+              "real_wake_kept": real_kept,
               "n_train": len(parts["train"]), "n_val": len(vrows), "params": model.count_params()}
     (out / "config.json").write_text(json.dumps(config, indent=2))
 
@@ -232,6 +261,8 @@ def train(args):
     print(f"\nval at threshold {rep['threshold']}:")
     for k, v in rep["false_reject"].items():
         print(f"  false reject  ww/{k:<14} {v['rate']:.3f}  (n={v['n']})")
+    for k, v in rep["false_reject_by_speaker"].items():
+        print(f"  false reject  ww/mems/{k:<9} {v['rate']:.3f}  (n={v['n']})")
     for k, v in rep["false_accept"].items():
         print(f"  false accept  {k:<17} {v['rate']:.3f}  (n={v['n']})")
     print(f"saved {out}")
@@ -240,9 +271,9 @@ def train(args):
 
 def main():
     ap = argparse.ArgumentParser(description="Train the Butterworth wake-word CNN.")
-    spans = F.ROOT / "dataset" / "manifest_v1_spans.csv"
-    ap.add_argument("--manifest", type=Path, default=spans if spans.exists() else F.ROOT / "dataset" / "manifest_v1.csv",
-                    help="default: manifest_v1_spans.csv (checked wake spans) if present, else manifest_v1.csv")
+    ap.add_argument("--manifest", type=Path, default=F.default_manifest(),
+                    help=f"default: manifest_{F.MANIFEST_VERSION}_spans.csv (checked wake spans) if present, "
+                         f"else manifest_{F.MANIFEST_VERSION}.csv")
     ap.add_argument("--root", type=Path, default=F.ROOT, help="folder the manifest paths start from (repo root)")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--steps", type=int, default=200, help="batches per epoch")
@@ -252,6 +283,8 @@ def main():
     ap.add_argument("--patience", type=int, default=8, help="early stopping on val AUC")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=4, help="batches built in parallel")
+    ap.add_argument("--real-wake", type=int, default=-1,
+                    help="keep at most N real (mems) wake clips per train speaker (-1: all, 0: generated wake only)")
     ap.add_argument("--out", type=Path, help="run folder (default: runs/<time>)")
     train(ap.parse_args())
 

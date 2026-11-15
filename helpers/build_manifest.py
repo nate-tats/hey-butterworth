@@ -1,10 +1,11 @@
-"""Build dataset/manifest_v1.csv from dataset/processed (read-only on audio).
+"""Build dataset/manifest_<version>.csv from dataset/processed (read-only on audio).
 
-Default is a dry run: prints the split summary and validation checks, writes nothing.
-Pass --write to write dataset/manifest_v1.csv.
+Every split version is kept in CONFIGS below, so old manifests stay documented and checkable.
+Default is a dry run of the latest version: prints the split summary and validation checks, writes nothing.
 
-    python helpers/build_manifest.py
-    python helpers/build_manifest.py --write
+    python helpers/build_manifest.py                      # dry run, latest version (v2)
+    python helpers/build_manifest.py --write              # write dataset/manifest_v2.csv
+    python helpers/build_manifest.py --version v1 --check # rebuild v1's clips with v1's rules, diff vs the CSV
 """
 import argparse
 import csv
@@ -17,26 +18,38 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = ROOT / "dataset" / "processed"
-OUT = ROOT / "dataset" / "manifest_v1.csv"
 
 COLUMNS = ["path", "label", "label_id", "source", "speaker", "domain", "phrase", "split"]
 LABELS = {"bg": ("background", 0), "sp": ("speech", 1), "ww": ("wake", 2)}  # ids are fixed
 DOMAINS = {"mems": "mems", "phone": "phone", "generated": "generated", "sample": "public"}
 NAME_RE = re.compile(r"^(bg|sp|ww)_(mems|phone|generated|sample)_(.+)_(\d{4})\.wav$")
+VOICE_RE = re.compile(r"^(.+)voice\d*$")   # mems_<speaker>voice[N]: session N of a real voice
 
 SEED = 42
 WW_GEN_BLOCK = 50         # generated wake clips are held out in blocks of consecutive indices
 WW_GEN_VAL_BLOCKS = 4     # -> 200 clips
 
-# false-word phrases (generated hard negatives) isolated in val
-VAL_PHRASES = {"hey.butter", "hi.butterworth", "hello", "hello.mother.earth"}
-
-# whole sources held out entirely, in every class they appear in (label -> sources)
-VAL_SOURCES = {
-    "ww": {"mems_micvoice", "mems_natvoice"},
-    "sp": {"mems_micvoice", "mems_natvoice", "sample_motispeech", "mems_shrclass", "mems_tamclass"},
+# One entry per split version. A real voice (mems_<name>voice[N]) is split by speaker, in every class it
+# appears in, and must be listed under train_voices or val_voices: a new voice stops the build until it
+# is assigned. val_sources holds out other whole sources; val_phrases the generated false-word phrases.
+_V1_VAL_SOURCES = {
+    "ww": set(),
+    "sp": {"sample_motispeech", "mems_shrclass", "mems_tamclass"},
     "bg": {"phone_geisel", "mems_library", "mems_tamclass", "mems_shrclass", "sample_motispeech"},
 }
+_V1_VAL_PHRASES = {"hey.butter", "hi.butterworth", "hello", "hello.mother.earth"}
+CONFIGS = {
+    # 2026-11-08: first split (27,080 clips)
+    "v1": {"train_voices": {"vi", "ji", "shr"}, "val_voices": {"mic", "nat"},
+           "val_sources": _V1_VAL_SOURCES, "val_phrases": _V1_VAL_PHRASES},
+    # 2026-11-11: +114 real wake clips. New voices darrell (81) and seth (4) go to train; natvoice1 (29)
+    # is a second session of nat and stays held out with nat. Everything else as v1, so v2 val is a
+    # superset of v1 val.
+    "v2": {"train_voices": {"vi", "ji", "shr", "darrell", "seth"}, "val_voices": {"mic", "nat"},
+           "val_sources": _V1_VAL_SOURCES, "val_phrases": _V1_VAL_PHRASES},
+}
+LATEST = "v2"
+
 # sessions that appear in two classes and must get the same split in both
 SHARED_SESSIONS = ["mems_tamclass", "mems_shrclass", "mems_envision", "phone_vinatyap",
                    "sample_motispeech", "sample_librispeech"]
@@ -55,12 +68,13 @@ def parse(path):
         speaker, phrase = "synthetic", name
     else:
         phrase = ""
-        speaker = name[:-len("voice")] if dom == "mems" and name.endswith("voice") else source
+        v = VOICE_RE.match(name) if dom == "mems" else None
+        speaker = v.group(1) if v else source  # natvoice1 is a second session of nat
     label, label_id = LABELS[prefix]
     return {
         "path": path.relative_to(ROOT).as_posix(), "label": label, "label_id": label_id,
         "source": source, "speaker": speaker, "domain": DOMAINS[dom], "phrase": phrase,
-        "split": "train", "_prefix": prefix, "_idx": int(idx),
+        "split": "train", "_prefix": prefix, "_idx": int(idx), "_voice": bool(v) if dom == "mems" else False,
     }
 
 
@@ -71,15 +85,21 @@ def pick_held_out(rng):
     return set(rng.sample(blocks, WW_GEN_VAL_BLOCKS))
 
 
-def assign_split(ww_gen_val):
+def assign_split(cfg, ww_gen_val):
+    unassigned = sorted({r["speaker"] for r in ROWS if r["_voice"]}
+                        - cfg["train_voices"] - cfg["val_voices"])
+    if unassigned:
+        sys.exit(f"voices not assigned to train or val in CONFIGS: {unassigned}")
     for r in ROWS:
         p, src = r["_prefix"], r["source"]
-        if src in VAL_SOURCES[p]:
+        if r["_voice"]:
+            val = r["speaker"] in cfg["val_voices"]
+        elif src in cfg["val_sources"][p]:
             val = True
         elif p == "ww" and src == "generated_hey.butterworth":
             val = r["_idx"] // WW_GEN_BLOCK in ww_gen_val
         elif p == "sp" and src.startswith("generated_"):
-            val = r["phrase"] in VAL_PHRASES
+            val = r["phrase"] in cfg["val_phrases"]
         else:
             val = False
         r["split"] = "val" if val else "train"
@@ -149,29 +169,45 @@ def validate():
 
 def main():
     global ROWS
-    ap = argparse.ArgumentParser(description="Build dataset/manifest_v1.csv (dry run unless --write).")
+    ap = argparse.ArgumentParser(description="Build dataset/manifest_<version>.csv (dry run unless --write).")
+    ap.add_argument("--version", default=LATEST, choices=sorted(CONFIGS), help=f"split version (default {LATEST})")
     ap.add_argument("--write", action="store_true", help="write the CSV (default: dry run)")
+    ap.add_argument("--check", action="store_true",
+                    help="rebuild only the clips listed in the existing CSV and report any split differences")
     args = ap.parse_args()
+    cfg, out = CONFIGS[args.version], ROOT / "dataset" / f"manifest_{args.version}.csv"
 
     ROWS = [parse(p) for d in LABELS for p in sorted((PROCESSED / d).glob("*.wav"))]
+    if args.check:
+        with out.open(newline="") as f:
+            old = {r["path"]: r for r in csv.DictReader(f)}
+        ROWS = [r for r in ROWS if r["path"] in old]
     rng = random.Random(SEED)
     ww_gen_val = pick_held_out(rng)
-    assign_split(ww_gen_val)
+    assign_split(cfg, ww_gen_val)
 
-    print(f"seed={SEED}")
+    print(f"version={args.version}  seed={SEED}")
     print(f"generated wake val blocks (of {WW_GEN_BLOCK} clips): {sorted(ww_gen_val)}")
-    print(f"held-out wake voices: {sorted(VAL_SOURCES['ww'])}")
-    print(f"false-word phrases in val: {sorted(VAL_PHRASES)}")
+    print(f"wake voices: train {sorted(cfg['train_voices'])}, val {sorted(cfg['val_voices'])}")
+    print(f"false-word phrases in val: {sorted(cfg['val_phrases'])}")
     problems = validate()
 
+    if args.check:
+        diff = [p for r in ROWS for p in [r["path"]]
+                if any(str(r[c]) != old[p][c] for c in COLUMNS)]
+        missing = sorted(set(old) - {r["path"] for r in ROWS})
+        print(f"\ncheck vs {out.name}: {len(ROWS)} rows rebuilt, {len(diff)} differ, {len(missing)} files missing")
+        for p in (diff + missing)[:10]:
+            print("  ", p)
+        sys.exit(1 if diff or missing else 0)
     if args.write:
         if problems:
             sys.exit("not writing: unexpected problems above")
-        with OUT.open("w", newline="") as f:
+        with out.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
             w.writeheader()
             w.writerows(ROWS)
-        print(f"\nwrote {OUT.relative_to(ROOT)} ({len(ROWS)} rows)")
+        print(f"\nwrote {out.relative_to(ROOT)} ({len(ROWS)} rows)")
     else:
         print("\ndry run: nothing written (use --write after approval)")
 
